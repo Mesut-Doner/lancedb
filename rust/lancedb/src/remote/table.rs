@@ -9,6 +9,7 @@ use super::db::ServerVersion;
 use super::util::stream_as_body;
 use super::ARROW_STREAM_CONTENT_TYPE;
 use crate::data::scannable::Scannable;
+use crate::expr::expr_to_sql_string;
 use crate::index::waiter::wait_for_index;
 use crate::index::Index;
 use crate::index::IndexStatistics;
@@ -607,13 +608,17 @@ impl<S: HttpSend> RemoteTable<S> {
         body["k"] = serde_json::Value::Number(serde_json::Number::from(limit));
 
         if let Some(filter) = &params.filter {
-            if let QueryFilter::Sql(filter) = filter {
-                body["filter"] = serde_json::Value::String(filter.clone());
-            } else {
-                return Err(Error::NotSupported {
-                    message: "querying a remote table with a non-sql filter".to_string(),
-                });
-            }
+            let filter_sql = match filter {
+                QueryFilter::Sql(sql) => sql.clone(),
+                QueryFilter::Datafusion(expr) => expr_to_sql_string(expr)?,
+                QueryFilter::Substrait(_) => {
+                    return Err(Error::NotSupported {
+                        message: "Substrait filters are not supported for remote queries"
+                            .to_string(),
+                    });
+                }
+            };
+            body["filter"] = serde_json::Value::String(filter_sql);
         }
 
         match &params.select {
